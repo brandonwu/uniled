@@ -55,7 +55,6 @@ from .const import (
 
 from .coordinator import UniledUpdateCoordinator
 
-import async_timeout
 import gc
 import asyncio
 import logging
@@ -256,7 +255,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             raise
 
         try:
-            async with async_timeout.timeout(UNILED_DEVICE_TIMEOUT):
+            async with asyncio.timeout(UNILED_DEVICE_TIMEOUT):
                 await startup_event.wait()
                 cancel_first_update()
                 _LOGGER.debug(
@@ -369,7 +368,9 @@ async def async_migrate_entry(hass, entry):
                     _LOGGER.warn(f"Removing redundent entity: {entity.unique_id}")
                     ent_reg.async_remove(entity.entity_id)
                     break
-        entry.version = 3
+        # Direct assignment (entry.version = 3) raises AttributeError on
+        # current HA Core: version must be changed via async_update_entry.
+        hass.config_entries.async_update_entry(entry, version=3)
         _LOGGER.info("Migration to version %s successful", entry.version)
  
     return True

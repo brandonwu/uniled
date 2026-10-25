@@ -59,7 +59,6 @@ import math
 import time
 import struct
 import asyncio
-import async_timeout
 import logging
 
 _LOGGER = logging.getLogger(__name__)
@@ -645,7 +644,7 @@ class ZenggeManager(UniledBleDevice):
                     UNILED_BLE_NOTFICATION_TIMEOUT,
                 )
                 try:
-                    async with async_timeout.timeout(UNILED_BLE_NOTFICATION_TIMEOUT):
+                    async with asyncio.timeout(UNILED_BLE_NOTFICATION_TIMEOUT):
                         await self._notification_event.wait()
                 except asyncio.TimeoutError:
                     _LOGGER.warning(

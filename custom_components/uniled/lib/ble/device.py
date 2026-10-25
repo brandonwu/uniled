@@ -27,7 +27,6 @@ from ..const import (
     UNILED_COMMAND_SETTLE_DELAY as UNILED_BLE_COMMAND_SETTLE_DELAY,
 )
 
-import async_timeout
 import asyncio
 import time
 import logging
@@ -323,7 +322,7 @@ class UniledBleDevice(UniledDevice):
                     UNILED_BLE_NOTFICATION_TIMEOUT,
                 )
                 try:
-                    async with async_timeout.timeout(UNILED_BLE_NOTFICATION_TIMEOUT):
+                    async with asyncio.timeout(UNILED_BLE_NOTFICATION_TIMEOUT):
                         await self._notification_event.wait()
                 except asyncio.TimeoutError:
                     _LOGGER.warning(

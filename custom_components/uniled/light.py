@@ -20,7 +20,6 @@ from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
     ATTR_COLOR_TEMP_KELVIN,
-    ATTR_COLOR_TEMP,
     ATTR_EFFECT,
     ATTR_RGB_COLOR,
     ATTR_RGBW_COLOR,
@@ -48,6 +47,11 @@ from .entity import (
 from .lib.attributes import UniledAttribute
 
 from .lib.const import (
+    # ATTR_COLOR_TEMP ("color_temp", the mired value) was removed from
+    # homeassistant.components.light in HA Core 2026.1 (deprecated since
+    # 2022.11). UniLED only uses it as an internal channel attribute key,
+    # so take the identical string from its own constants instead.
+    ATTR_HA_COLOR_TEMP as ATTR_COLOR_TEMP,
     ATTR_HA_MIN_COLOR_TEMP_KELVIN,
     ATTR_HA_MAX_COLOR_TEMP_KELVIN,
     ATTR_HA_MIN_MIREDS,

@@ -32,6 +32,9 @@ class UniledUpdateCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            # Current HA requires the entry to be passed explicitly;
+            # relying on the ContextVar fallback breaks in 2026.8.
+            config_entry=entry,
             name=f"{self.device.name}",
             update_method=self._async_update,
             update_interval=timedelta(seconds = device.update_interval),

@@ -1077,8 +1077,15 @@ class BanlanX6xx(SP6xxEProxy):
                 elif self.is_static_mode(mode):
                     if cfg.hue and cfg.cct and coexistence:
                         device.master.set(ATTR_HA_RGBWW_COLOR, (data[37], data[38], data[39], data[40], data[41]))
+                        # Also expose the split attributes: HA only shows
+                        # separate colour/temperature controls when rgb
+                        # and color_temp are their own colour modes.
+                        device.master.set(ATTR_HA_RGB_COLOR, (data[37], data[38], data[39]))
+                        device.master.set(ATTR_UL_CCT_COLOR, (data[40], data[41], white_level, None))
                     elif cfg.hue and cfg.white and coexistence:
                         device.master.set(ATTR_HA_RGBW_COLOR, (data[37], data[38], data[39], white_level))
+                        device.master.set(ATTR_HA_RGB_COLOR, (data[37], data[38], data[39]))
+                        device.master.set(ATTR_HA_WHITE, white_level)
                     elif cfg.hue or cfg.cct or cfg.white:
                         white_mode = COLOR_MODE_BRIGHTNESS
                         supported_color_modes = set()
@@ -1122,17 +1129,17 @@ class BanlanX6xx(SP6xxEProxy):
             # supported set, otherwise HA refuses to render the light's
             # state at all (most visibly while an effect is active).
             # Prefer, in order: the mode set above for a static mode,
-            # the last reported mode, the coexistence mode, then the
+            # the static mode family, the last reported mode, then the
             # current mode family.
             candidates = []
             if device.master.has(ATTR_HA_COLOR_MODE):
                 candidates.append(device.master.get(ATTR_HA_COLOR_MODE))
+            if self.is_static_mode(mode):
+                candidates.append(
+                    COLOR_MODE_RGB if self.is_color_mode(mode) else white_mode
+                )
             if last_colors[ATTR_HA_COLOR_MODE]:
                 candidates.append(last_colors[ATTR_HA_COLOR_MODE])
-            if cfg.coexistence and cfg.hue:
-                candidates.append(
-                    COLOR_MODE_RGBWW if cfg.cct else COLOR_MODE_RGBW
-                )
             if self.is_color_mode(mode):
                 candidates.append(COLOR_MODE_RGB)
             candidates.append(white_mode)
@@ -1144,25 +1151,7 @@ class BanlanX6xx(SP6xxEProxy):
                 ),
             )
 
-            if cfg.coexistence and cfg.hue:
-                # Ensure the coexistence colour attribute exists for
-                # the reported mode: restore the last value, or build
-                # it from the effect colour the device just reported.
-                primary = (
-                    ATTR_HA_RGBWW_COLOR if cfg.cct else ATTR_HA_RGBW_COLOR
-                )
-                if not device.master.has(primary):
-                    if last_colors[primary] is not None:
-                        device.master.set(primary, last_colors[primary])
-                    elif device.master.has(ATTR_HA_RGB_COLOR):
-                        rgb = device.master.get(ATTR_HA_RGB_COLOR)
-                        device.master.set(
-                            primary,
-                            (*rgb, white_level)
-                            if primary == ATTR_HA_RGBW_COLOR
-                            else (*rgb, 0, 0),
-                        )
-            elif not any(
+            if not any(
                 device.master.has(attr)
                 for attr in (
                     ATTR_HA_RGB_COLOR,
@@ -1664,10 +1653,11 @@ class BanlanX6xx(SP6xxEProxy):
             white_mode = COLOR_MODE_COLOR_TEMP
         elif cfg.white and cfg.hue:
             white_mode = COLOR_MODE_WHITE
-        if cfg.coexistence and cfg.hue and cfg.cct:
-            return {COLOR_MODE_RGBWW}, white_mode
-        if cfg.coexistence and cfg.hue and cfg.white:
-            return {COLOR_MODE_RGBW}, white_mode
+        # Note: coexistence (RGBW/RGBCCT) types are deliberately NOT
+        # collapsed to the rgbw/rgbww colour modes. The device itself
+        # treats static colour and static white as separate modes, and
+        # HA only surfaces a separate white/temperature control when
+        # white/color_temp is its own supported mode.
         modes = set()
         if cfg.hue:
             modes.add(COLOR_MODE_RGB)

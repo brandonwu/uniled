@@ -1203,6 +1203,47 @@ class BanlanX6xx(SP6xxEProxy):
 
         return True
 
+    def build_command(
+        self, device: UniledBleDevice, channel: UniledChannel, attr: str, value: Any
+    ) -> list[bytearray]:
+        """Build supported command"""
+        mode = channel.status.light_mode_number
+        # Some HA actions are mode switches wearing a value's clothing:
+        # the frontend "Set White" action sends white=<current
+        # brightness>, and picking a colour while an effect runs sends
+        # the retained colour. The generic no-change gate in
+        # UniledModel.build_command swallows those whenever the value
+        # happens to equal the retained one (e.g. white at 100% when
+        # the white level is also 255), so bypass the gate when the
+        # attribute implies a mode switch.
+        bypass = (
+            (attr == ATTR_HA_WHITE and mode != MODE_STATIC_WHITE)
+            or (attr == ATTR_UL_CCT_COLOR and mode != MODE_STATIC_WHITE)
+            or (
+                attr
+                in (ATTR_HA_RGB_COLOR, ATTR_HA_RGBW_COLOR, ATTR_HA_RGBWW_COLOR)
+                and (self.is_dynamic_mode(mode) or self.is_sound_mode(mode))
+            )
+        )
+        if bypass:
+            builder = getattr(self, f"build_{attr}_command", None)
+            if callable(builder):
+                try:
+                    commands = builder(device, channel, value)
+                except Exception as ex:
+                    _LOGGER.warn(
+                        "%s: Channel %s, command %s generated an exception: %s",
+                        self.model_name,
+                        channel.number,
+                        attr,
+                        str(ex),
+                    )
+                    return []
+                if commands:
+                    channel.set(attr, value)
+                return commands if commands else []
+        return super().build_command(device, channel, attr, value)
+
     def build_on_connect(self, device: UniledBleDevice) -> list[bytearray] | None:
         """Build on connect message(s)"""
         return None

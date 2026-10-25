@@ -1117,13 +1117,52 @@ class BanlanX6xx(SP6xxEProxy):
             # static colour/temperature alongside the effect.
             supported, white_mode = self.ha_color_modes(cfg)
             device.master.set(ATTR_HA_SUPPORTED_COLOR_MODES, supported)
-            if not device.master.has(ATTR_HA_COLOR_MODE):
-                device.master.set(
-                    ATTR_HA_COLOR_MODE,
-                    last_colors[ATTR_HA_COLOR_MODE]
-                    or (COLOR_MODE_RGB if self.is_color_mode(mode) else white_mode),
+
+            # The reported colour mode must always be a member of the
+            # supported set, otherwise HA refuses to render the light's
+            # state at all (most visibly while an effect is active).
+            # Prefer, in order: the mode set above for a static mode,
+            # the last reported mode, the coexistence mode, then the
+            # current mode family.
+            candidates = []
+            if device.master.has(ATTR_HA_COLOR_MODE):
+                candidates.append(device.master.get(ATTR_HA_COLOR_MODE))
+            if last_colors[ATTR_HA_COLOR_MODE]:
+                candidates.append(last_colors[ATTR_HA_COLOR_MODE])
+            if cfg.coexistence and cfg.hue:
+                candidates.append(
+                    COLOR_MODE_RGBWW if cfg.cct else COLOR_MODE_RGBW
                 )
-            if not any(
+            if self.is_color_mode(mode):
+                candidates.append(COLOR_MODE_RGB)
+            candidates.append(white_mode)
+            device.master.set(
+                ATTR_HA_COLOR_MODE,
+                next(
+                    (c for c in candidates if c in supported),
+                    next(iter(supported)),
+                ),
+            )
+
+            if cfg.coexistence and cfg.hue:
+                # Ensure the coexistence colour attribute exists for
+                # the reported mode: restore the last value, or build
+                # it from the effect colour the device just reported.
+                primary = (
+                    ATTR_HA_RGBWW_COLOR if cfg.cct else ATTR_HA_RGBW_COLOR
+                )
+                if not device.master.has(primary):
+                    if last_colors[primary] is not None:
+                        device.master.set(primary, last_colors[primary])
+                    elif device.master.has(ATTR_HA_RGB_COLOR):
+                        rgb = device.master.get(ATTR_HA_RGB_COLOR)
+                        device.master.set(
+                            primary,
+                            (*rgb, white_level)
+                            if primary == ATTR_HA_RGBW_COLOR
+                            else (*rgb, 0, 0),
+                        )
+            elif not any(
                 device.master.has(attr)
                 for attr in (
                     ATTR_HA_RGB_COLOR,

@@ -82,3 +82,34 @@ set_state:
         number:
           min: 0
           max: 255
+set_music_mode:
+  name: Set Music Mode
+  description: Switch the light to a sound-reactive (music) mode.
+  target:
+    entity:
+      integration: uniled
+      domain: light
+  fields:
+    effect:
+      name: Sound Effect
+      description: Name of the sound effect/pattern to run.
+      selector:
+        text:
+    white:
+      name: White
+      description: Use the sound white mode instead of sound color.
+      default: false
+      selector:
+        boolean:
+    audio_input:
+      name: Audio Input
+      description: Audio input source (device specific, e.g. "Internal Microphone").
+      selector:
+        text:
+    sensitivity:
+      name: Input Sensitivity
+      description: Set the audio input sensitivity.
+      selector:
+        number:
+          min: 1
+          max: 255

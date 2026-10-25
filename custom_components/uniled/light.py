@@ -65,6 +65,7 @@ from .lib.const import (
     ATTR_UL_EFFECT_LENGTH,
     ATTR_UL_EFFECT_DIRECTION,
     ATTR_UL_LIGHT_MODE,
+    ATTR_UL_AUDIO_INPUT,
     ATTR_UL_SENSITIVITY,
     ATTR_UL_RGB2_COLOR,
     UNILED_DEFAULT_MAX_KELVIN,
@@ -110,6 +111,21 @@ async def async_setup_entry(
     schema[ATTR_UL_SENSITIVITY] = vol.All(vol.Coerce(int), vol.Clamp(min=1, max=255))
 
     platform.async_register_entity_service("set_state", schema, "async_set_state")
+
+    # Sound/music modes are a parameterised configuration (input source,
+    # sensitivity, pattern) rather than a plain effect, so - following
+    # the flux_led precedent - they are exposed as a service.
+    music_schema = {
+        vol.Optional(ATTR_EFFECT): cv.string,
+        vol.Optional("white"): cv.boolean,
+        vol.Optional(ATTR_UL_AUDIO_INPUT): cv.string,
+        vol.Optional(ATTR_UL_SENSITIVITY): vol.All(
+            vol.Coerce(int), vol.Clamp(min=1, max=255)
+        ),
+    }
+    platform.async_register_entity_service(
+        "set_music_mode", music_schema, "async_set_music_mode"
+    )
 
     await async_uniled_entity_setup(
         hass, entry, async_add_entities, _add_light_entity, Platform.LIGHT
@@ -308,6 +324,51 @@ class UniledLightEntity(
     def effect_list(self) -> list | None:
         """Effect List"""
         return self.device.get_list(self.channel, ATTR_EFFECT)
+
+    async def async_set_music_mode(
+        self,
+        effect: str | None = None,
+        white: bool = False,
+        audio_input: str | None = None,
+        sensitivity: int | None = None,
+    ) -> None:
+        """Switch the light to a sound/music mode (entity service)."""
+        async with self.coordinator.lock:
+            modes = self.device.get_list(self.channel, ATTR_UL_LIGHT_MODE)
+            sound_modes = [m for m in modes if "sound" in str(m).lower()]
+            if not sound_modes:
+                _LOGGER.warning(
+                    "%s: Device has no sound modes", self.device.name
+                )
+                return
+            wanted = "white" if white else "color"
+            target = next(
+                (m for m in sound_modes if wanted in str(m).lower()),
+                sound_modes[0],
+            )
+            if not self.is_on:
+                await self.device.async_set_state(
+                    self.channel, self.feature.attr, True
+                )
+            await self.device.async_set_state(
+                self.channel, ATTR_UL_LIGHT_MODE, target
+            )
+            if effect is not None:
+                await self.device.async_set_state(
+                    self.channel, ATTR_EFFECT, effect
+                )
+            if audio_input is not None or sensitivity is not None:
+                # The audio attributes only exist in the channel status
+                # once the device reports a sound mode, so refresh first.
+                await self.coordinator.async_request_refresh()
+                if audio_input is not None:
+                    await self.device.async_set_state(
+                        self.channel, ATTR_UL_AUDIO_INPUT, audio_input
+                    )
+                if sensitivity is not None:
+                    await self.device.async_set_state(
+                        self.channel, ATTR_UL_SENSITIVITY, sensitivity
+                    )
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on (forwards)."""

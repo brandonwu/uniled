@@ -16,7 +16,6 @@ from ..features import (
     EffectDirectionFeature,
     AudioInputFeature,
     AudioSensitivityFeature,
-    LightModeFeature,
     LightTypeFeature,
     ChipOrderFeature,
     OnOffEffectFeature,
@@ -943,6 +942,21 @@ class BanlanX6xx(SP6xxEProxy):
             _LOGGER.warning("Invalid Packet!")
             return False
 
+        # Snapshot the last reported colour state before the status is
+        # replaced below; dynamic/sound modes keep reporting it (the HA
+        # convention) unless the running effect provides its own colour.
+        last_colors = {
+            attr: device.master.status.get(attr)
+            for attr in (
+                ATTR_HA_RGB_COLOR,
+                ATTR_HA_RGBW_COLOR,
+                ATTR_HA_RGBWW_COLOR,
+                ATTR_UL_CCT_COLOR,
+                ATTR_HA_WHITE,
+                ATTR_HA_COLOR_MODE,
+            )
+        }
+
         cfg: _CONFIG = self.match_light_type_config(data[19])
         device.master.context = cfg
         if not cfg:
@@ -1095,10 +1109,36 @@ class BanlanX6xx(SP6xxEProxy):
                 elif mode == MODE_CUSTOM_COLOR:
                     device.master.set(ATTR_HA_BRIGHTNESS, color_level)
 
+            # HA-native reporting, applied for every known mode: the
+            # light always advertises the union of colour modes the
+            # hardware supports (from its light type config) instead of
+            # only what the current device mode uses, and while a
+            # dynamic/sound effect runs it keeps reporting the last
+            # static colour/temperature alongside the effect.
+            supported, white_mode = self.ha_color_modes(cfg)
+            device.master.set(ATTR_HA_SUPPORTED_COLOR_MODES, supported)
+            if not device.master.has(ATTR_HA_COLOR_MODE):
+                device.master.set(
+                    ATTR_HA_COLOR_MODE,
+                    last_colors[ATTR_HA_COLOR_MODE]
+                    or (COLOR_MODE_RGB if self.is_color_mode(mode) else white_mode),
+                )
+            if not any(
+                device.master.has(attr)
+                for attr in (
+                    ATTR_HA_RGB_COLOR,
+                    ATTR_HA_RGBW_COLOR,
+                    ATTR_HA_RGBWW_COLOR,
+                    ATTR_UL_CCT_COLOR,
+                )
+            ):
+                for attr, value in last_colors.items():
+                    if attr != ATTR_HA_COLOR_MODE and value is not None:
+                        device.master.set(attr, value)
+
         if cfg:
             features = [
                 LightStripFeature(extra=UNILED_CONTROL_ATTRIBUTES),
-                LightModeFeature(),
                 EffectTypeFeature(),
                 EffectLoopFeature(),
                 EffectPlayFeature(),
@@ -1241,17 +1281,10 @@ class BanlanX6xx(SP6xxEProxy):
         self, device: UniledBleDevice, channel: UniledChannel, level: int
     ) -> bytearray | None:
         """The bytes to send for a change to white mode"""
-        if self.is_white_mode(channel.status.light_mode_number):
-            _LOGGER.warn("Skip white mode change as already white")
+        if channel.status.light_mode_number == MODE_STATIC_WHITE:
             return None
-        if self.is_sound_mode(channel.status.light_mode_number):
-            mode = MODE_SOUND_WHITE
-        elif self.is_dynamic_mode(channel.status.light_mode_number):
-            mode = MODE_DYNAMIC_WHITE
-        else:
-            mode = MODE_STATIC_WHITE
         channel.status.set(ATTR_HA_COLOR_MODE, COLOR_MODE_WHITE)
-        return self.build_light_mode_command(device, channel, mode)
+        return self.build_light_mode_command(device, channel, MODE_STATIC_WHITE)
 
     def build_brightness_command(
         self, device: UniledBleDevice, channel: UniledChannel, level: int
@@ -1269,12 +1302,25 @@ class BanlanX6xx(SP6xxEProxy):
     ) -> bytearray | None:
         """The bytes to send for a color level change"""
         red, green, blue = rgb
-        if self.is_static_mode(channel.status.light_mode_number):
-            level = channel.status.brightness
-            if level is None:
-                level = 0xFF
-            return self.__encoder(0x52, bytearray([red, green, blue, level]))
-        return self.__encoder(0x57, bytearray([red, green, blue]))
+        level = channel.status.brightness
+        if level is None:
+            level = 0xFF
+        if channel.status.light_mode_number != MODE_STATIC_COLOR:
+            # A colour set in HA always targets the static colour mode:
+            # if an effect is running (or the device is in a white or
+            # sound mode), switch back to static colour first.
+            commands = self.build_light_mode_command(
+                device, channel, MODE_STATIC_COLOR, 0x01
+            )
+            if commands is None:
+                # Light type has no static colour mode; keep the legacy
+                # in-mode colour command.
+                return self.__encoder(0x57, bytearray([red, green, blue]))
+            commands.append(
+                self.__encoder(0x52, bytearray([red, green, blue, level]))
+            )
+            return commands
+        return self.__encoder(0x52, bytearray([red, green, blue, level]))
 
     def build_rgbw_color_command(
         self,
@@ -1284,10 +1330,16 @@ class BanlanX6xx(SP6xxEProxy):
     ) -> bytearray | None:
         """The bytes to send for a color level change"""
         red, green, blue, white = rgbw
-        return [
-            self.build_rgb_color_command(device, channel, (red, green, blue)),
-            self.__encoder(0x51, bytearray([0x01, white])),
-        ]
+        commands = []
+        rgb_commands = self.build_rgb_color_command(
+            device, channel, (red, green, blue)
+        )
+        if rgb_commands:
+            commands.extend(
+                rgb_commands if isinstance(rgb_commands, list) else [rgb_commands]
+            )
+        commands.append(self.__encoder(0x51, bytearray([0x01, white])))
+        return commands
 
     def build_rgbww_color_command(
         self,
@@ -1300,10 +1352,14 @@ class BanlanX6xx(SP6xxEProxy):
         level = channel.status.brightness
         if level is None:
             level = 0xFF
-        return [
+        commands = []
+        for built in (
             self.build_rgb_color_command(device, channel, (red, green, blue)),
             self.build_cct_color_command(device, channel, (cold, warm, level, None)),
-        ]
+        ):
+            if built:
+                commands.extend(built if isinstance(built, list) else [built])
+        return commands
 
     def build_cct_color_command(
         self,
@@ -1313,9 +1369,17 @@ class BanlanX6xx(SP6xxEProxy):
     ) -> bytearray | None:
         """The bytes to send for a temperature color change."""
         cold, warm, level, kelvin = cct
-        if self.is_static_mode(channel.status.light_mode_number):
-            return self.__encoder(0x61, bytearray([cold, warm]))
-        return self.__encoder(0x60, bytearray([cold, warm]))
+        if channel.status.light_mode_number != MODE_STATIC_WHITE:
+            # As with colour sets, a temperature set in HA targets the
+            # static white mode; switch to it first if needed.
+            commands = self.build_light_mode_command(
+                device, channel, MODE_STATIC_WHITE, 0x01
+            )
+            if commands is None:
+                return self.__encoder(0x60, bytearray([cold, warm]))
+            commands.append(self.__encoder(0x61, bytearray([cold, warm])))
+            return commands
+        return self.__encoder(0x61, bytearray([cold, warm]))
 
     def build_light_mode_command(
         self,
@@ -1341,6 +1405,10 @@ class BanlanX6xx(SP6xxEProxy):
             if effect not in fxlist:
                 effect = next(iter(fxlist))
             force_refresh = True
+        # Keep the cached mode number in step with the command we are
+        # about to send, so builders chained in the same turn-on (effect
+        # first, then colour) act on the new mode, not the previous one.
+        channel.status.set(ATTR_UL_LIGHT_MODE_NUMBER, mode)
         commands = [self.__encoder(0x53, bytearray([mode, effect]))]
         if force_refresh or not channel.status.get(ATTR_UL_DEVICE_FORCE_REFRESH):
             commands.append(self.build_state_query(device))
@@ -1369,6 +1437,26 @@ class BanlanX6xx(SP6xxEProxy):
         mode: int | None = None,
     ) -> [bytearray] | None:
         """The bytes to send for an effect change"""
+        if isinstance(effect, str) and mode is None:
+            cfg: _CONFIG = channel.context
+            if cfg:
+                # HA sees one combined effect list spanning the static,
+                # dynamic and custom device modes; find which mode owns
+                # the requested effect and switch the device to it.
+                for candidate in (
+                    MODE_STATIC_COLOR,
+                    MODE_STATIC_WHITE,
+                    MODE_DYNAMIC_COLOR,
+                    MODE_DYNAMIC_WHITE,
+                    MODE_CUSTOM_COLOR,
+                ):
+                    if (fxlist := cfg.dictof_mode_effects(candidate)) is None:
+                        continue
+                    for code, fx in fxlist.items():
+                        if fx.name == effect:
+                            return self.build_light_mode_command(
+                                device, channel, candidate, code
+                            )
         if mode is None:
             mode = channel.status.light_mode_number
         if isinstance(effect, str):
@@ -1385,14 +1473,23 @@ class BanlanX6xx(SP6xxEProxy):
     ) -> list | None:
         """Return list of effect names"""
         cfg: _CONFIG = channel.context
-        mode = channel.status.light_mode_number
-        if cfg and mode is not None:
+        if not cfg:
+            return None
+        # One combined list across the static, dynamic and custom modes,
+        # so the HA effect picker does not change with the device mode.
+        effects = list()
+        for mode in (
+            MODE_STATIC_COLOR,
+            MODE_STATIC_WHITE,
+            MODE_DYNAMIC_COLOR,
+            MODE_DYNAMIC_WHITE,
+            MODE_CUSTOM_COLOR,
+        ):
             if (fxlist := cfg.dictof_mode_effects(mode)) is not None:
-                effects = list()
-                for fx in fxlist:
-                    effects.append(str(fxlist[fx].name))
-                return effects
-        return None
+                for fx in fxlist.values():
+                    if str(fx.name) not in effects:
+                        effects.append(str(fx.name))
+        return effects if effects else None
 
     def build_effect_speed_command(
         self, device: UniledBleDevice, channel: UniledChannel, value: int
@@ -1521,6 +1618,28 @@ class BanlanX6xx(SP6xxEProxy):
     ##
     ## Helpers
     ##
+    def ha_color_modes(self, cfg: _CONFIG) -> tuple[set, str]:
+        """HA colour modes for a light type config, plus its white mode"""
+        white_mode = COLOR_MODE_BRIGHTNESS
+        if cfg.cct:
+            white_mode = COLOR_MODE_COLOR_TEMP
+        elif cfg.white and cfg.hue:
+            white_mode = COLOR_MODE_WHITE
+        if cfg.coexistence and cfg.hue and cfg.cct:
+            return {COLOR_MODE_RGBWW}, white_mode
+        if cfg.coexistence and cfg.hue and cfg.white:
+            return {COLOR_MODE_RGBW}, white_mode
+        modes = set()
+        if cfg.hue:
+            modes.add(COLOR_MODE_RGB)
+        if cfg.cct:
+            modes.add(COLOR_MODE_COLOR_TEMP)
+        elif cfg.white and cfg.hue:
+            modes.add(COLOR_MODE_WHITE)
+        if not modes:
+            modes.add(COLOR_MODE_BRIGHTNESS)
+        return modes, white_mode
+
     def match_light_type_config(self, light_type: int) -> _CONFIG | None:
         """Light type dictionary"""
         if self.configs is not None:

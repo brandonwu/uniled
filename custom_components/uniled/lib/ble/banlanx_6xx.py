@@ -1215,9 +1215,11 @@ class BanlanX6xx(SP6xxEProxy):
         # UniledModel.build_command swallows those whenever the value
         # happens to equal the retained one (e.g. white at 100% when
         # the white level is also 255), so bypass the gate when the
-        # attribute implies a mode switch.
+        # attribute implies a mode switch. A DIY colour upload is a
+        # one-shot write, not state, so it always bypasses the gate.
         bypass = (
-            (attr == ATTR_HA_WHITE and mode != MODE_STATIC_WHITE)
+            (attr == ATTR_UL_DIY_COLORS)
+            or (attr == ATTR_HA_WHITE and mode != MODE_STATIC_WHITE)
             or (attr == ATTR_UL_CCT_COLOR and mode != MODE_STATIC_WHITE)
             or (
                 attr
@@ -1536,6 +1538,73 @@ class BanlanX6xx(SP6xxEProxy):
                 effect, cfg.dictof_channel_effects(mode), channel.status.effect_number
             )
         return self.build_light_mode_command(device, channel, mode, effect)
+
+    def build_diy_colors_command(
+        self,
+        device: UniledBleDevice,
+        channel: UniledChannel,
+        value: Any,
+    ) -> list[bytearray] | None:
+        """The bytes to upload a DIY (custom colour) definition.
+
+        Recovered from the BanlanX app (saveDiyLfx, command 0x63):
+        the payload is a 0x01 tag byte, the custom effect number, the
+        segment count, then five bytes per segment - pixel count,
+        start position and the RGB colour. Positions are cumulative
+        along the strip. The value is a dict as built by the
+        set_diy_colors light service: {"effect": name, "segments":
+        [(pixels, (r, g, b)), ...], "play": bool}.
+        """
+        if not isinstance(value, dict):
+            return None
+        cfg: _CONFIG = channel.context
+        if not cfg:
+            return None
+        fxlist = cfg.dictof_mode_effects(MODE_CUSTOM_COLOR)
+        if fxlist is None:
+            return None
+        mode_id = None
+        for code, fx in fxlist.items():
+            if fx.name == value.get("effect"):
+                mode_id = code
+                break
+        if mode_id is None:
+            _LOGGER.warning(
+                "%s: Channel %s, '%s' is not a custom (DIY) effect.",
+                self.model_name,
+                channel.number,
+                value.get("effect"),
+            )
+            return None
+        segments = value.get("segments") or []
+        if not segments or len(segments) > 50:
+            _LOGGER.warning(
+                "%s: Channel %s, DIY upload needs 1-50 segments (frame"
+                " payload is a single length byte).",
+                self.model_name,
+                channel.number,
+            )
+            return None
+        payload = bytearray([0x01, mode_id, len(segments)])
+        position = 0
+        for pixels, rgb in segments:
+            if position > 0xFF:
+                _LOGGER.warning(
+                    "%s: Channel %s, DIY segment starts past pixel 255;"
+                    " positions are single bytes in this protocol.",
+                    self.model_name,
+                    channel.number,
+                )
+                return None
+            payload += bytearray([pixels, position, *rgb])
+            position += pixels
+        commands = [self.__encoder(0x63, payload)]
+        if value.get("play", True):
+            if play := self.build_light_mode_command(
+                device, channel, MODE_CUSTOM_COLOR, mode_id
+            ):
+                commands.extend(play)
+        return commands
 
     def fetch_effect_list(
         self, device: UniledBleDevice, channel: UniledChannel

@@ -113,3 +113,30 @@ set_music_mode:
         number:
           min: 1
           max: 255
+set_diy_colors:
+  name: Set DIY Colors
+  description: Upload a DIY (custom colour) segment definition for a custom effect to the device, in the same format the BanlanX app uses. Segments play in order along the strip; each segment's start position is computed from the lengths of the segments before it.
+  target:
+    entity:
+      integration: uniled
+      domain: light
+  fields:
+    effect:
+      name: Custom Effect
+      description: Name of the custom effect to define (e.g. "Chase Forward", "Twinkle", "Fade").
+      required: true
+      selector:
+        text:
+    segments:
+      name: Segments
+      description: List of segments, each with "pixels" (segment length in pixels, 1-255) and "rgb" (a [red, green, blue] list, 0-255 each). At most 50 segments, and segments must start within the first 256 pixels of the strip.
+      required: true
+      example: '[{"pixels": 10, "rgb": [255, 0, 0]}, {"pixels": 10, "rgb": [0, 0, 255]}]'
+      selector:
+        object:
+    play:
+      name: Play
+      description: Switch the light to the custom effect after uploading the definition.
+      default: true
+      selector:
+        boolean:

@@ -59,6 +59,7 @@ from .lib.const import (
     ATTR_UL_CCT_COLOR,
     ATTR_UL_DEVICE_FORCE_REFRESH,
     ATTR_UL_DEVICE_NEEDS_ON,
+    ATTR_UL_DIY_COLORS,
     ATTR_UL_EFFECT_LOOP,
     ATTR_UL_EFFECT_PLAY,
     ATTR_UL_EFFECT_SPEED,
@@ -125,6 +126,32 @@ async def async_setup_entry(
     }
     platform.async_register_entity_service(
         "set_music_mode", music_schema, "async_set_music_mode"
+    )
+
+    # DIY (custom colour) definitions live on the controller and are
+    # uploaded with a dedicated command (saveDiyLfx), in the same way
+    # the BanlanX app programs them, so - like music modes - they are
+    # exposed as a service rather than a state attribute.
+    diy_schema = {
+        vol.Required(ATTR_EFFECT): cv.string,
+        vol.Required("segments"): vol.All(
+            cv.ensure_list,
+            vol.Length(min=1, max=50),
+            [
+                {
+                    vol.Required("pixels"): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=255)
+                    ),
+                    vol.Required("rgb"): vol.All(
+                        vol.Coerce(tuple), vol.ExactSequence((cv.byte,) * 3)
+                    ),
+                }
+            ],
+        ),
+        vol.Optional("play"): cv.boolean,
+    }
+    platform.async_register_entity_service(
+        "set_diy_colors", diy_schema, "async_set_diy_colors"
     )
 
     await async_uniled_entity_setup(
@@ -369,6 +396,36 @@ class UniledLightEntity(
                     await self.device.async_set_state(
                         self.channel, ATTR_UL_SENSITIVITY, sensitivity
                     )
+
+    async def async_set_diy_colors(
+        self,
+        effect: str,
+        segments: list,
+        play: bool = True,
+    ) -> None:
+        """Upload a DIY (custom colour) definition (entity service)."""
+        async with self.coordinator.lock:
+            if play and not self.is_on:
+                await self.device.async_set_state(
+                    self.channel, self.feature.attr, True
+                )
+            value = {
+                "effect": effect,
+                "segments": [
+                    (int(segment["pixels"]), tuple(segment["rgb"]))
+                    for segment in segments
+                ],
+                "play": play,
+            }
+            if not await self.device.async_set_state(
+                self.channel, ATTR_UL_DIY_COLORS, value
+            ):
+                _LOGGER.warning(
+                    "%s: DIY colour upload for effect '%s' was not sent"
+                    " (not a custom effect, or invalid segments).",
+                    self.device.name,
+                    effect,
+                )
 
     async def async_turn_on(self, **kwargs):
         """Turn the entity on (forwards)."""

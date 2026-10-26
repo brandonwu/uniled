@@ -89,6 +89,7 @@ ATTR_UL_CHIP_TYPE = "chip_type"
 ATTR_UL_COEXISTENCE = "coexistence"
 ATTR_UL_DEVICE_NEEDS_ON = "device_needs_on"
 ATTR_UL_DEVICE_FORCE_REFRESH = "device_force_refresh"
+ATTR_UL_DIY_COLORS = "diy_colors"  # {effect, segments, play} one-shot upload
 ATTR_UL_EFFECT = ATTR_HA_EFFECT
 ATTR_UL_EFFECT_NUMBER = "effect_number"
 ATTR_UL_EFFECT_LOOP = "effect_loop"

@@ -136,11 +136,11 @@ async def async_setup_entry(
         vol.Required(ATTR_EFFECT): cv.string,
         vol.Required("segments"): vol.All(
             cv.ensure_list,
-            vol.Length(min=1, max=50),
+            vol.Length(min=1, max=14),
             [
                 {
                     vol.Required("pixels"): vol.All(
-                        vol.Coerce(int), vol.Range(min=1, max=255)
+                        vol.Coerce(int), vol.Range(min=1, max=150)
                     ),
                     vol.Required("rgb"): vol.All(
                         vol.Coerce(tuple), vol.ExactSequence((cv.byte,) * 3)

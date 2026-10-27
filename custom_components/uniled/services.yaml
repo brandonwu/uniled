@@ -129,7 +129,7 @@ set_diy_colors:
         text:
     segments:
       name: Segments
-      description: List of segments, each with "pixels" (segment length in pixels, 1-255) and "rgb" (a [red, green, blue] list, 0-255 each). At most 50 segments, and segments must start within the first 256 pixels of the strip.
+      description: List of segments, each with "pixels" (segment length in pixels, 1-150) and "rgb" (a [red, green, blue] list, 0-255 each). At most 14 segments (the device's DIY table size), and segments must start within the first 256 pixels of the strip.
       required: true
       example: '[{"pixels": 10, "rgb": [255, 0, 0]}, {"pixels": 10, "rgb": [0, 0, 255]}]'
       selector:

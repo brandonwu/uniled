@@ -1547,16 +1547,18 @@ class BanlanX6xx(SP6xxEProxy):
     ) -> list[bytearray] | None:
         """The bytes to upload a DIY (custom colour) definition.
 
-        Recovered from the BanlanX app (saveDiyLfx, command 0x63):
-        the payload is the custom effect number, the segment count,
-        then five bytes per segment - pixel count, start position and
-        the RGB colour. Positions are cumulative along the strip.
-        (The app builder prepends a 0x01 byte that the device does
-        NOT expect; hardware testing on 2026-10-27 showed it shifts
-        the whole parse by one byte, so it is not sent here.)
-        The value is a dict as built by the set_diy_colors light
-        service: {"effect": name, "segments": [(pixels, (r, g, b)),
-        ...], "play": bool}.
+        Recovered from the BanlanX app (saveDiyLfx, command 0x63) and
+        confirmed against the vendor's native payload parser
+        (API_IC_Diy_Clr_Set_Handler in libscene_lfx.so): the wire
+        payload is a 0x01 tag byte, the custom effect number, the
+        segment count, then five bytes per segment - pixel count,
+        start position and the RGB colour. Positions are cumulative
+        along the strip. The device stores at most 14 segments per
+        definition (its DIY table size) and at most 150 pixels per
+        segment; more than that corrupts the table, so it is
+        rejected here. The value is a dict as built by the
+        set_diy_colors light service: {"effect": name, "segments":
+        [(pixels, (r, g, b)), ...], "play": bool}.
         """
         if not isinstance(value, dict):
             return None
@@ -1580,34 +1582,39 @@ class BanlanX6xx(SP6xxEProxy):
             )
             return None
         segments = value.get("segments") or []
-        if not segments or len(segments) > 50:
+        if not segments or len(segments) > 14:
             _LOGGER.warning(
-                "%s: Channel %s, DIY upload needs 1-50 segments (frame"
-                " payload is a single length byte).",
+                "%s: Channel %s, DIY upload needs 1-14 segments (the"
+                " device stores at most 14 per definition).",
                 self.model_name,
                 channel.number,
             )
             return None
-        payload = bytearray([mode_id, len(segments)])
+        payload = bytearray([0x01, mode_id, len(segments)])
         position = 0
         for pixels, rgb in segments:
-            if position > 0xFF:
+            if pixels > 150 or position > 0xFF:
                 _LOGGER.warning(
-                    "%s: Channel %s, DIY segment starts past pixel 255;"
-                    " positions are single bytes in this protocol.",
+                    "%s: Channel %s, DIY segment is over 150 pixels or"
+                    " starts past pixel 255 (segment positions are"
+                    " single bytes in this protocol).",
                     self.model_name,
                     channel.number,
                 )
                 return None
             payload += bytearray([pixels, position, *rgb])
             position += pixels
-        commands = [self.__encoder(0x63, payload)]
+        upload = self.__encoder(0x63, payload)
         if value.get("play", True):
+            # Switch to the custom effect before uploading, mirroring
+            # the app flow (the user is viewing the effect while they
+            # edit it) - the device applies the definition to the
+            # effect it has selected.
             if play := self.build_light_mode_command(
                 device, channel, MODE_CUSTOM_COLOR, mode_id
             ):
-                commands.extend(play)
-        return commands
+                return [*play, upload]
+        return [upload]
 
     def fetch_effect_list(
         self, device: UniledBleDevice, channel: UniledChannel
